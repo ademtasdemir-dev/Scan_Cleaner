@@ -280,6 +280,103 @@ def generate_clean_worksheet_pdf(output_filename: str = "Arbeitsblatt_Dividieren
     print(f"[ERFOLG] Arbeitsblatt-PDF erfolgreich generiert: {output_filename}")
 
 
+def generate_universal_pdf_from_json(doc_data: Dict[str, Any], output_filename: str):
+    """
+    Erzeugt dynamisch ein sauberes DIN-A4 PDF aus der von Gemma-4 / LM Studio
+    extrahierten JSON-Struktur eines beliebigen Arbeitsblatt-Scans.
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from reportlab.lib import colors
+    except ImportError:
+        print("[FEHLER] reportlab nicht installiert: pip install reportlab")
+        return
+
+    c = canvas.Canvas(output_filename, pagesize=A4)
+    width, height = A4
+
+    title = str(doc_data.get("title", "Arbeitsblatt"))
+    page_num = str(doc_data.get("pageNumber", ""))
+    theme_hex = str(doc_data.get("themeColor", "#D66840"))
+    if not theme_hex.startswith("#") or len(theme_hex) != 7:
+        theme_hex = "#D66840"
+
+    # Kopf-Banner
+    c.setFillColor(colors.HexColor(theme_hex))
+    c.rect(34, height - 60, width - 68, 38, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(54, height - 45, title)
+
+    cur_y = height - 95
+    tasks = doc_data.get("tasks", [])
+    for idx, t in enumerate(tasks):
+        if cur_y < 90:
+            c.showPage()
+            cur_y = height - 60
+
+        num = str(t.get("taskNumber", idx + 1))
+        c.setFillColor(colors.HexColor(theme_hex))
+        c.rect(42, cur_y - 4, 18, 18, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(51, cur_y + 1, num)
+
+        c.setFillColor(colors.HexColor("#1E293B"))
+        c.setFont("Helvetica-Bold", 10)
+        t_title = str(t.get("title", ""))
+        if t_title:
+            c.drawString(68, cur_y + 1, t_title)
+            cur_y -= 16
+
+        c.setFont("Helvetica", 10)
+        for sub in t.get("subtasks", []) or []:
+            lbl = str(sub.get("label", ""))
+            lines = sub.get("storyLines", []) or []
+            c.drawString(68, cur_y, f"{lbl} {' '.join(lines)}")
+            cur_y -= 14
+            if sub.get("question"):
+                c.drawString(82, cur_y, str(sub["question"]))
+                cur_y -= 14
+            if sub.get("equationPrefix"):
+                c.drawString(82, cur_y, f"{sub['equationPrefix']} ______ R ______")
+                cur_y -= 14
+            cur_y -= 4
+
+        cols = t.get("equationColumns", []) or []
+        if cols:
+            max_rows = 0
+            for c_idx, col in enumerate(cols[:3]):
+                px = 68 + c_idx * 165
+                c.drawString(px, cur_y, str(col.get("label", "")))
+                items = col.get("items", []) or []
+                if len(items) > max_rows:
+                    max_rows = len(items)
+                for r_idx, eq in enumerate(items):
+                    ey = cur_y - (r_idx * 15)
+                    expr = str(eq.get("expressionLeft", ""))
+                    suffix = " ___ R ___" if eq.get("hasRemainder") else " ______"
+                    c.drawString(px + 18, ey, f"{expr}{suffix}")
+            cur_y -= (max_rows * 15 + 12)
+
+        for rid in t.get("riddles", []) or []:
+            c.drawString(68, cur_y, f"{rid.get('label', '')} {' '.join(rid.get('lines', []))}")
+            cur_y -= 14
+            c.drawString(82, cur_y, f"{rid.get('answerPrefix', 'Antwort:')} ____________.")
+            cur_y -= 18
+
+        cur_y -= 10
+
+    if page_num:
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(34, 30, page_num)
+
+    c.showPage()
+    c.save()
+    print(f"[ERFOLG] Universelles Arbeitsblatt-PDF gespeichert: {output_filename}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Offline-Tool für Mathe-Arbeitsblätter & Gemma-4 (LM Studio)"
@@ -291,13 +388,13 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="Arbeitsblatt_Dividieren_mit_Rest_S22.pdf",
+        default="Arbeitsblatt_Bereinigt.pdf",
         help="Dateiname für den PDF-Export"
     )
     parser.add_argument(
         "--analyze-page",
         type=str,
-        help="Pfad zu einem Bild einer Buchseite zur Analyse via LM Studio / Gemma-4"
+        help="Pfad zu einem beliebigen Scan/Foto zur Analyse & PDF-Erzeugung via LM Studio / Gemma-4"
     )
     parser.add_argument(
         "--model",
@@ -316,15 +413,12 @@ def main():
     print("  MatheBlatt & Vision Studio (Offline LM Studio + Gemma 4 Runner)  ")
     print("===================================================================")
 
-    if args.generate_pdf or len(sys.argv) == 1:
-        print("[1/2] Erzeuge bereinigtes Arbeitsblatt DIN-A4 PDF...")
-        generate_clean_worksheet_pdf(args.output)
-
     if args.analyze_page:
-        print(f"[2/2] Sende Bild '{args.analyze_page}' an LM Studio ({args.model})...")
+        print(f"[1/2] Sende Scan '{args.analyze_page}' an LM Studio ({args.model})...")
         prompt = (
-            "Lies alle Aufgaben von diesem Schulbuchblatt ab. Finde alle handschriftlichen "
-            "Ergebnisse und listen sie separat auf. Gib den Originaltext der Aufgaben vollständig wieder."
+            "Extrahiere alle Aufgaben dieser Buchseite ohne handschriftliche Loesungen als JSON "
+            "mit den Schluesseln: title, pageNumber, themeColor, tasks (taskNumber, title, type, "
+            "subtasks, equationColumns, riddles). Antworte NUR mit validem JSON."
         )
         result = query_lm_studio(
             prompt=prompt,
@@ -335,6 +429,17 @@ def main():
         print("\\n--- Antwort von Gemma-4 (LM Studio) ---")
         print(result)
         print("---------------------------------------")
+        try:
+            cleaned = result.strip().removeprefix("\`\`\`json").removeprefix("\`\`\`").removesuffix("\`\`\`").strip()
+            parsed = json.loads(cleaned)
+            print("[2/2] Erzeuge universelles DIN-A4 PDF aus dem analysierten Scan...")
+            generate_universal_pdf_from_json(parsed, args.output)
+        except Exception:
+            print("[Hinweis] Fallback auf Standard-PDF-Generator...")
+            generate_clean_worksheet_pdf(args.output)
+    elif args.generate_pdf or len(sys.argv) == 1:
+        print("[1/1] Erzeuge bereinigtes Arbeitsblatt DIN-A4 PDF (Seite 22)...")
+        generate_clean_worksheet_pdf(args.output)
 
 
 if __name__ == "__main__":

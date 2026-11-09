@@ -1,9 +1,13 @@
+import 'dotenv/config';
 import express from 'express';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { DEFAULT_BOOK_PAGE_22, UniversalWorksheetDocument } from './src/types/worksheetModel.js';
+import {
+  DEFAULT_BOOK_PAGE_22,
+  normalizeAnalyzedDocument,
+} from './src/types/worksheetModel.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,10 +15,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-// Middleware for parsing large base64 image uploads (up to 30mb)
 app.use(express.json({ limit: '35mb' }));
 
-// Initialize Google GenAI client (User-Agent header required by AI Studio guidelines)
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
   httpOptions: {
@@ -24,48 +26,28 @@ const ai = new GoogleGenAI({
   },
 });
 
-/**
- * Universal Worksheet Analysis API Endpoint
- * Analyzes any uploaded math scan or worksheet photo,
- * removes handwriting, extracts tasks, and structures clean printable math.
- */
 app.post('/api/analyze-worksheet', async (req, res) => {
   try {
-    const { imageBase64, mimeType = 'image/png' } = req.body;
+    const { imageBase64, mimeType = 'image/jpeg' } = req.body;
 
-    if (!imageBase64) {
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
       return res.status(400).json({ error: 'Kein Bild bereitgestellt (imageBase64 fehlt).' });
     }
 
-    // Strip data URL header if present
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+    const cleanBase64 = imageBase64.includes('base64,')
+      ? imageBase64.split('base64,')[1]
+      : imageBase64;
 
-    // Check if imageBase64 is a relative path or invalid base64
-    if (cleanBase64.startsWith('/') || cleanBase64.length < 50) {
+    // Note: JPEG base64 strings legitimately start with '/9j/', so only check length < 100
+    if (cleanBase64.length < 100) {
       return res.json({
         success: true,
         document: DEFAULT_BOOK_PAGE_22,
-        note: 'Lokaler Bildpfad erkannt: Standard-Dokument zurückgegeben.',
+        note: 'Kurzer Bildpfad erkannt: Standard-Dokument zurückgegeben.',
       });
     }
 
-    const systemPrompt = `
-Du bist ein professioneller Grundschul-Mathematik-Lehrbuch-Redakteur und OCR-Spezialist.
-Deine Aufgabe ist es, eine eingescannte Schulbuchseite oder ein Arbeitsblatt exakt zu analysieren:
-1. Erkenne den Titel, das Thema und die Aufgaben (1, 2, 3, etc.).
-2. WICHTIG: Entferne ALLE handschriftlichen Bleistift-/Füller-Ergebnisse aus Lücken, Gleichungen und Kärtchen.
-   Die Aufgaben müssen komplett bereinigt (leer zum selbst Lösen) extrahiert werden.
-3. Berechne parallel die mathematisch korrekten Lösungen für das Lösungsblatt.
-4. Gib das Ergebnis als valides JSON-Schema zurück.
-`;
-
-    const userPrompt = `
-Analysiere diese Schulbuchseite. Extrahiere alle Aufgaben, entferne die Handschrift komplett und gib ein sauberes, strukturiertes Arbeitsblatt zurück.
-`;
-
-    // If GEMINI_API_KEY is not available or empty, return default parsed worksheet model
     if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.includes('MY_GEMINI_API_KEY')) {
-      console.log('Kein GEMINI_API_KEY gesetzt, verwende Offline-Vorlage für Seite 22');
       return res.json({
         success: true,
         document: DEFAULT_BOOK_PAGE_22,
@@ -73,37 +55,149 @@ Analysiere diese Schulbuchseite. Extrahiere alle Aufgaben, entferne die Handschr
       });
     }
 
-    // Prompt gemini-3.8-flash with structured JSON response schema
+    const systemPrompt = `
+Du bist ein hochpräziser Dokumenten-, Schulbuch- und Brief-Rekonstruktions-Spezialist (OCR & Layout-Rebuild).
+Analysiere das hochgeladene Foto oder den Scan vollständig und antworte AUSSCHLIESSLICH mit einem validen JSON-Objekt.
+
+Entscheide zuerst über "documentCategory":
+- FALL A ("document"): Wenn das Bild ein Brief, Arztbrief, radiologischer Befundbericht, Anschreiben, Bescheid oder Textdokument ist.
+  Gib exakt diese JSON-Struktur zurück:
+  {
+    "documentCategory": "document",
+    "title": "Kurzer Dokumenttitel (z.B. MRT-Befundbericht LWS – Tasdemir, Adem)",
+    "pageNumber": "1",
+    "themeColor": "#1e3a8a",
+    "footerNote": "Dokument digitalisiert, geglättet & Handschrift/Unterschrift bereinigt",
+    "crossReference": "DIN A4 Rekonstruktion",
+    "hasSmileySelfAssessment": false,
+    "letterMeta": {
+      "topReferenceLine": "Text ganz oben links falls vorhanden (z.B. Tasdemir, Adem)",
+      "senderLine": "Absenderzeile über dem Empfänger (z.B. MainRadiologie, Jahnstr. 5, 97199 Ochsenfurt)",
+      "dateLine": "Datum rechts (z.B. 15.11.2023)",
+      "recipientLines": ["Zeile 1 Empfänger", "Zeile 2", "..."],
+      "noticeLine": "Nachrichtlich-Zeile falls vorhanden (z.B. Nachrichtlich an: ...)",
+      "salutation": "Anrede (z.B. Sehr geehrter Herr Kollege Sabah,)",
+      "introLines": ["Einleitungssatz 1", "Einleitungssatz 2 (z.B. Patientenname, Geburtsdatum, Adresse)"],
+      "closingPhrase": "Grußformel (z.B. Mit freundlichen Grüßen)",
+      "signerName": "Gedruckter Name des Unterzeichners (z.B. Dr. Alexandra Obert)",
+      "removedHandwritingNote": "Handschriftliche Unterschrift entfernt"
+    },
+    "documentSections": [
+      {
+        "id": "sec-1",
+        "heading": "Abschnittsüberschrift (z.B. Befund: oder Beurteilung:)",
+        "inlineLeadBold": "Optionaler fettgedruckter Zeilenanfang (z.B. Anamnese und Fragestellung:)",
+        "paragraphs": ["Absatz 1 Wort für Wort", "Absatz 2 Wort für Wort"],
+        "listItems": ["Optional falls nummerierte Liste: 1. ...", "2. ..."]
+      }
+    ],
+    "tasks": []
+  }
+
+- FALL B ("worksheet"): Wenn das Bild eine Schulbuchseite oder ein Arbeitsblatt mit Aufgaben ist.
+  Ignoriere und entferne ALLE handschriftlichen Eintragungen (Bleistift/Stift) aus den Aufgabenfeldern und berechne die Lösungen selbst:
+  {
+    "documentCategory": "worksheet",
+    "title": "Seitentitel",
+    "pageNumber": "Seitenzahl",
+    "themeColor": "#d86b34",
+    "footerNote": "Fußzeile links",
+    "crossReference": "Fußzeile rechts",
+    "hasSmileySelfAssessment": true,
+    "tasks": [
+      {
+        "id": "task-1",
+        "taskNumber": "1",
+        "title": "",
+        "instructions": "Aufgabenstellung",
+        "hasPartnerWork": false,
+        "hasCrayonIcon": false,
+        "hasIllustration": false,
+        "type": "word_problems | equation_columns | coloring_cards | number_riddles | open_prompt",
+        "subtasks": [
+          {
+            "id": "1a",
+            "label": "a)",
+            "storyLines": ["Satz 1", "Satz 2"],
+            "question": "Frage?",
+            "equationPrefix": "32 : 5 =",
+            "solutionQuotient": "6",
+            "solutionRemainder": "2",
+            "answerLine1Prefix": "",
+            "answerLine1BlankSolution": "6",
+            "answerLine1Suffix": "Karten erhält jedes Kind.",
+            "answerLine2BlankSolution": "2",
+            "answerLine2Suffix": "Karten bleiben übrig."
+          }
+        ],
+        "equationColumns": [
+          {
+            "label": "a)",
+            "items": [
+              {
+                "id": "2a-1",
+                "expressionLeft": "27 : 5 =",
+                "solutionMain": "5",
+                "hasRemainder": true,
+                "solutionRemainder": "2"
+              }
+            ]
+          }
+        ],
+        "cards": [
+          { "id": "c1", "row": 1, "text": "40 : 6", "expectedColor": "green" }
+        ],
+        "sacks": [
+          { "label": "Rest", "subLabel": "2", "color": "red" }
+        ],
+        "riddles": [
+          {
+            "id": "5a",
+            "label": "a)",
+            "lines": ["Rätselzeile 1"],
+            "answerPrefix": "Meine Zahl heißt",
+            "solutions": ["27"],
+            "answerSuffix": "."
+          }
+        ]
+      }
+    ]
+  }
+`;
+
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: [
         {
           inlineData: {
-            mimeType: mimeType,
+            mimeType: mimeType || 'image/jpeg',
             data: cleanBase64,
           },
         },
         {
-          text: userPrompt,
+          text: 'Analysiere diesen Scan vollständig Wort für Wort, entferne alle handschriftlichen Einträge/Unterschriften und rekonstruiere das saubere DIN-A4-Dokument als JSON.',
         },
       ],
       config: {
         systemInstruction: systemPrompt,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: 'application/json',
       },
     });
 
     const rawText = response.text || '{}';
-    let parsedData: any;
+    let parsedRaw: any;
     try {
-      parsedData = JSON.parse(rawText);
+      parsedRaw = JSON.parse(rawText);
     } catch {
-      parsedData = DEFAULT_BOOK_PAGE_22;
+      parsedRaw = DEFAULT_BOOK_PAGE_22;
     }
+
+    const normalizedDoc = normalizeAnalyzedDocument(parsedRaw);
 
     res.json({
       success: true,
-      document: parsedData,
+      document: normalizedDoc,
     });
   } catch (error: any) {
     console.error('Fehler bei der Dokumentanalyse:', error);
@@ -115,7 +209,6 @@ Analysiere diese Schulbuchseite. Extrahiere alle Aufgaben, entferne die Handschr
 });
 
 async function startServer() {
-  // Mount Vite middlewares in development
   const isDev = process.env.NODE_ENV !== 'production';
 
   if (isDev) {

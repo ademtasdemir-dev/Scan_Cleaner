@@ -7,12 +7,17 @@ import {
   Eye,
   FileText,
   Paintbrush,
+  Sparkles,
+  UploadCloud,
 } from 'lucide-react';
 import {
   RemainderBagColor,
-  createEmptyStudentState,
-  evaluateStudentWorksheet,
-} from './data/worksheetData';
+  UniversalWorksheetDocument,
+  DEFAULT_BOOK_PAGE_22,
+  BEFUND_SABAH_MRT_2023_DOC,
+  createEmptyUniversalState,
+  evaluateUniversalWorksheet,
+} from './types/worksheetModel';
 import { WorksheetPage, WorksheetViewMode } from './components/WorksheetPage';
 import {
   downloadWorksheetPdf,
@@ -35,7 +40,13 @@ type ActiveWorkspaceTab =
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveWorkspaceTab>('clean');
-  const [studentState, setStudentState] = useState(() => createEmptyStudentState());
+  const [currentDoc, setCurrentDoc] = useState<UniversalWorksheetDocument>(DEFAULT_BOOK_PAGE_22);
+  const [uploadedScanUrl, setUploadedScanUrl] = useState<string>(
+    '/assets/aistudio/image_d72e70b6.png'
+  );
+  const [studentState, setStudentState] = useState(() =>
+    createEmptyUniversalState(DEFAULT_BOOK_PAGE_22)
+  );
   const [activeBrush, setActiveBrush] = useState<RemainderBagColor>('red');
   const [showCheckFeedback, setShowCheckFeedback] = useState(false);
 
@@ -44,18 +55,20 @@ export default function App() {
   const [includeTask6Lines, setIncludeTask6Lines] = useState(false);
   const [useOriginalCrop, setUseOriginalCrop] = useState(true);
 
-  // Notification banner for downloaded PDF
+  // Notification banners
   const [lastDownloadedFile, setLastDownloadedFile] = useState<string | null>(null);
+  const [scanLoadedBanner, setScanLoadedBanner] = useState<string | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [pdfPreviewMode, setPdfPreviewMode] = useState<'clean' | 'solution'>('clean');
 
   const validationSummary = useMemo(
-    () => evaluateStudentWorksheet(studentState),
-    [studentState]
+    () => evaluateUniversalWorksheet(currentDoc, studentState),
+    [currentDoc, studentState]
   );
 
   const handleDownloadPdf = (targetMode: 'clean' | 'solution' | 'custom') => {
     const filename = downloadWorksheetPdf({
+      document: currentDoc,
       mode: targetMode,
       customState: studentState,
       includeSchoolHeader,
@@ -70,6 +83,7 @@ export default function App() {
       URL.revokeObjectURL(pdfPreviewUrl);
     }
     const url = createWorksheetPdfBlobUrl({
+      document: currentDoc,
       mode: modeToPreview,
       customState: studentState,
       includeSchoolHeader,
@@ -79,6 +93,26 @@ export default function App() {
     setPdfPreviewMode(modeToPreview);
     setPdfPreviewUrl(url);
     setActiveTab('pdf-preview');
+  };
+
+  const handleResetToDefaultPage22 = () => {
+    setCurrentDoc(DEFAULT_BOOK_PAGE_22);
+    setUploadedScanUrl('/assets/aistudio/image_d72e70b6.png');
+    setStudentState(createEmptyUniversalState(DEFAULT_BOOK_PAGE_22));
+    setShowCheckFeedback(false);
+    setScanLoadedBanner(null);
+    setActiveTab('clean');
+  };
+
+  const handleLoadBefundSabah = () => {
+    setCurrentDoc(BEFUND_SABAH_MRT_2023_DOC);
+    setUploadedScanUrl('/assets/aistudio/befund_sabah_mrt_2023_e83309f5.jpeg');
+    setStudentState(createEmptyUniversalState(BEFUND_SABAH_MRT_2023_DOC));
+    setShowCheckFeedback(false);
+    setScanLoadedBanner(
+      '"Radiologischer Befundbericht – MRT LWS nativ (Tasdemir, Adem)" – 4 Sektionen ohne Handschrift/Unterschrift als DIN-A4-Dokument rekonstruiert.'
+    );
+    setActiveTab('clean');
   };
 
   const worksheetMode: WorksheetViewMode =
@@ -106,7 +140,7 @@ export default function App() {
           MatheBlatt Studio
         </a>
 
-        {/* Zone 2: 4 concise single-line text navigation links */}
+        {/* Zone 2: Navigation links */}
         <nav
           aria-label="Hauptnavigation"
           className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600"
@@ -322,7 +356,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span>Buchseite 22</span>
+              <span>{currentDoc.pageNumber ? `Buchseite ${currentDoc.pageNumber}` : 'Arbeitsblatt'}</span>
               <span aria-hidden="true">·</span>
               <span>DIN A4 Vektor-Layout</span>
               <span aria-hidden="true">·</span>
@@ -330,13 +364,45 @@ export default function App() {
             </div>
           </div>
 
+          {/* Scan Loaded Notification Banner */}
+          {scanLoadedBanner && (
+            <div
+              role="status"
+              data-testid="scan-loaded-banner"
+              className="no-print bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-xs text-emerald-950 flex flex-wrap items-center justify-between gap-3"
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  <strong>Neuer Scan erfolgreich rekonstruiert:</strong> {scanLoadedBanner}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('compare')}
+                  className="px-2.5 py-1 bg-white border border-emerald-300 rounded-md font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
+                >
+                  Vorher / Nachher vergleichen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScanLoadedBanner(null)}
+                  className="text-emerald-700 hover:text-emerald-950 font-semibold px-1 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Interactive Mode Toolbar (Brush Picker & Validation Controls) */}
           {activeTab === 'interactive' && (
             <div className="no-print bg-white border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 mr-1">
                   <Paintbrush className="w-3.5 h-3.5 text-orange-600" />
-                  Stiftfarbe für Aufgabe 4:
+                  Stiftfarbe für Kärtchen:
                 </span>
                 {[
                   { id: 'red' as const, label: 'Rot (Rest 2)', activeClass: 'bg-red-600 text-white' },
@@ -385,7 +451,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    setStudentState(createEmptyStudentState());
+                    setStudentState(createEmptyUniversalState(currentDoc));
                     setShowCheckFeedback(false);
                   }}
                   className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer"
@@ -405,17 +471,18 @@ export default function App() {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                   <div>
                     <h3 className="text-sm font-semibold text-slate-900">
-                      Vorher: Hochgeladenes Foto (Mit Handschrift)
+                      Vorher: Hochgeladener Scan (Mit Handschrift)
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Original-Vorlage Seite 22 mit ausgefüllten Bleistift-Ergebnissen
+                      {currentDoc.title}{' '}
+                      {currentDoc.pageNumber ? `(Seite ${currentDoc.pageNumber})` : ''} – Originalbild
                     </p>
                   </div>
                 </div>
                 <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
                   <img
-                    src="/assets/aistudio/image_d72e70b6.png"
-                    alt="Original-Buchseite 22 mit handschriftlichen Lösungen"
+                    src={uploadedScanUrl}
+                    alt={`Original-Scan ${currentDoc.title}`}
                     className="w-full h-auto object-contain"
                   />
                 </div>
@@ -429,7 +496,7 @@ export default function App() {
                       Nachher: Bereinigtes Arbeitsblatt (Druckfertig)
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Alle 48 Handschrift-Felder entfernt · Vektorscharfe Linien & Schrift
+                      Alle {validationSummary.totalFields} Eingabefelder bereinigt · Vektorscharfes A4-Layout
                     </p>
                   </div>
                   <button
@@ -442,6 +509,8 @@ export default function App() {
                 </div>
                 <div className="overflow-hidden rounded-lg border border-slate-200">
                   <WorksheetPage
+                    document={currentDoc}
+                    sourceImageUrl={uploadedScanUrl}
                     mode="clean"
                     studentState={studentState}
                     onChangeState={setStudentState}
@@ -463,7 +532,7 @@ export default function App() {
                     Integrierte PDF-Dokument-Vorschau ({pdfPreviewMode === 'clean' ? 'Leeres Arbeitsblatt' : 'Lösungsblatt'})
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Direkt generiertes DIN-A4 PDF-Dokument im Vektorformat
+                    Direkt generiertes DIN-A4 PDF-Dokument im Vektorformat ({currentDoc.title})
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -507,7 +576,20 @@ export default function App() {
             </div>
           ) : activeTab === 'upload-new' ? (
             <UniversalUploader
-              onAnalyzeSuccess={({ document: doc }) => {
+              onAnalyzeSuccess={({ imageBase64, document: analyzedDoc }) => {
+                setCurrentDoc(analyzedDoc);
+                setUploadedScanUrl(imageBase64);
+                setStudentState(createEmptyUniversalState(analyzedDoc));
+                setShowCheckFeedback(false);
+                const countInfo =
+                  analyzedDoc.documentCategory === 'document'
+                    ? `${analyzedDoc.documentSections?.length || 0} Textsektionen ohne Unterschrift/Handschrift`
+                    : `${analyzedDoc.tasks.length} Aufgaben ohne Handschrift`;
+                setScanLoadedBanner(
+                  `"${analyzedDoc.title}"${
+                    analyzedDoc.pageNumber ? ` (Seite ${analyzedDoc.pageNumber})` : ''
+                  } – ${countInfo} aufgebaut.`
+                );
                 setActiveTab('clean');
               }}
             />
@@ -518,6 +600,8 @@ export default function App() {
           ) : (
             /* Standard A4 Sheet Stage (Also used when printing via window.print()) */
             <WorksheetPage
+              document={currentDoc}
+              sourceImageUrl={uploadedScanUrl}
               mode={worksheetMode}
               studentState={studentState}
               onChangeState={setStudentState}
@@ -537,11 +621,14 @@ export default function App() {
           <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
             <div>
               <h1 className="text-base font-display font-bold text-slate-900">
-                Arbeitsblatt: Dividieren mit Rest (S. 22)
+                {currentDoc.documentCategory === 'document' ? 'Dokument: ' : 'Arbeitsblatt: '}
+                {currentDoc.title}{' '}
+                {currentDoc.pageNumber ? `(S. ${currentDoc.pageNumber})` : ''}
               </h1>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Die Buchseite wurde vollständig im DIN-A4-Format rekonstruiert. Sämtliche
-                handschriftlichen Bleistift-Einträge in den Aufgaben 1 bis 5 wurden entfernt.
+                {currentDoc.documentCategory === 'document'
+                  ? 'Das Schreiben/Befunddokument wurde vollständig im DIN-A4-Format rekonstruiert. Papierfalten, Schatten und handschriftliche Unterschriften wurden entfernt.'
+                  : `Die Buchseite wurde vollständig im DIN-A4-Format rekonstruiert. Sämtliche handschriftlichen Einträge in allen ${currentDoc.tasks.length} Aufgaben wurden entfernt.`}
               </p>
             </div>
 
@@ -570,7 +657,7 @@ export default function App() {
                 className="w-full py-2.5 px-4 bg-[#D66840] hover:bg-[#bf5630] text-white font-semibold text-sm rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs whitespace-nowrap"
               >
                 <FileDown className="w-4 h-4" />
-                Arbeitsblatt als PDF laden (Leer)
+                Als bereinigtes DIN-A4 PDF laden
               </button>
 
               <button
@@ -579,7 +666,9 @@ export default function App() {
                 className="w-full py-2 px-4 bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
               >
                 <FileText className="w-4 h-4" />
-                Lösungsblatt als PDF laden (Mit Lösungen)
+                {currentDoc.documentCategory === 'document'
+                  ? 'Mit Bereinigungs-Vermerk als PDF laden'
+                  : 'Lösungsblatt als PDF laden (Mit Lösungen)'}
               </button>
 
               <div className="grid grid-cols-2 gap-2 pt-0.5">
@@ -599,6 +688,33 @@ export default function App() {
                   <Eye className="w-3.5 h-3.5" />
                   PDF im Browser öffnen
                 </button>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('upload-new')}
+                  className="w-full py-2 px-3 bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 font-semibold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  Eigenen Scan / Foto hochladen
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleLoadBefundSabah}
+                    className="py-1.5 px-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 font-medium text-[11px] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    MRT-Befund (Sabah) zeigen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetToDefaultPage22}
+                    className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-[11px] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    Mathe-Blatt S. 22 zeigen
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -621,7 +737,7 @@ export default function App() {
                   Name, Klasse & Datum Kopfzeile
                 </span>
                 <span className="text-slate-500">
-                  Fügt über dem orangen Banner eine Beschriftungszeile für Kopien hinzu
+                  Fügt über dem Banner eine Beschriftungszeile für Kopien hinzu
                 </span>
               </div>
             </label>
@@ -635,10 +751,10 @@ export default function App() {
               />
               <div className="text-xs">
                 <span className="font-semibold text-slate-800 block">
-                  Schreiblinien für Aufgabe 6 einblenden
+                  Schreiblinien für Freitext-Aufgaben einblenden
                 </span>
                 <span className="text-slate-500">
-                  Ergänzt zwei Linien, damit Kinder das Rätsel direkt aufs Blatt schreiben können
+                  Ergänzt zwei Linien, damit Kinder eigene Antworten direkt aufs Blatt schreiben können
                 </span>
               </div>
             </label>
@@ -652,38 +768,56 @@ export default function App() {
               />
               <div className="text-xs">
                 <span className="font-semibold text-slate-800 block">
-                  Original-Buchillustration (Aufgabe 1)
+                  Original-Buchillustration freistellen
                 </span>
                 <span className="text-slate-500">
-                  Nutzt die freigestellte Original-Tischszene aus der Vorlage (alternativ: reine SVG-Vektorgrafik)
+                  Nutzt die automatisch ausgeschnittene Illustration aus dem Scan (alternativ: reine SVG-Vektorgrafik)
                 </span>
               </div>
             </label>
           </div>
 
-          {/* Card 3: Overview of Cleaned Tasks & Solutions Reference */}
+          {/* Card 3: Overview of Cleaned Tasks / Document Sections */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
             <h2 className="text-sm font-display font-bold text-slate-900">
-              Übersicht der bereinigten Aufgaben
+              {currentDoc.documentCategory === 'document'
+                ? `Übersicht der bereinigten Sektionen (${currentDoc.documentSections?.length || 0})`
+                : `Übersicht der bereinigten Aufgaben (${currentDoc.tasks.length})`}
             </h2>
             <ul className="space-y-2 text-xs text-slate-600 leading-relaxed">
-              <li className="border-b border-slate-100 pb-1.5">
-                <strong className="text-slate-800">Aufgabe 1 (a, b, c):</strong> 32 Spielkarten an
-                5, 6 und 7 Kinder verteilen — alle 12 handschriftlichen Zahlenfelder geleert.
-              </li>
-              <li className="border-b border-slate-100 pb-1.5">
-                <strong className="text-slate-800">Aufgabe 2 & 3 (a, b, c):</strong> 18
-                Divisionsaufgaben mit Rest (36 Ergebnisfelder) bereinigt und exakt ausgerichtet.
-              </li>
-              <li className="border-b border-slate-100 pb-1.5">
-                <strong className="text-slate-800">Aufgabe 4 (Kärtchen & Säcke):</strong> 10
-                Aufgabenkärtchen und 3 farbige Säcke (Rest 2 = Rot, Rest 3 = Blau, Rest 4 = Grün).
-              </li>
-              <li>
-                <strong className="text-slate-800">Aufgabe 5 & 6 (Zahlenrätsel):</strong>{' '}
-                Neuner-Reihe (Lösung: 27) und Sechser-Reihe (Lösungen: 12, 36, 60) ohne
-                Handschrift rekonstruiert.
-              </li>
+              {currentDoc.documentCategory === 'document'
+                ? (currentDoc.documentSections || []).map((sec, idx, arr) => (
+                    <li
+                      key={sec.id}
+                      className={idx < arr.length - 1 ? 'border-b border-slate-100 pb-1.5' : ''}
+                    >
+                      <strong className="text-slate-800">
+                        {sec.heading || sec.inlineLeadBold || `Abschnitt ${idx + 1}`}:
+                      </strong>{' '}
+                      {sec.paragraphs?.[0]?.slice(0, 75) || ''}
+                      {(sec.paragraphs?.[0]?.length || 0) > 75 ? '…' : ''}
+                    </li>
+                  ))
+                : currentDoc.tasks.map((t, idx) => (
+                    <li
+                      key={t.id}
+                      className={
+                        idx < currentDoc.tasks.length - 1 ? 'border-b border-slate-100 pb-1.5' : ''
+                      }
+                    >
+                      <strong className="text-slate-800">Aufgabe {t.taskNumber}:</strong>{' '}
+                      {t.title ||
+                        (t.type === 'word-problem'
+                          ? `Sachaufgabe (${t.subtasks?.length || 0} Teilaufgaben)`
+                          : t.type === 'equation-grid'
+                          ? `Rechenpäckchen (${t.equationColumns?.length || 0} Spalten)`
+                          : t.type === 'cards'
+                          ? `Farbkärtchen (${t.cards?.length || 0} Kärtchen)`
+                          : t.type === 'riddle'
+                          ? `Zahlenrätsel (${t.riddles?.length || 0} Rätsel)`
+                          : 'Freie Zusatzaufgabe')}
+                    </li>
+                  ))}
             </ul>
           </div>
         </aside>

@@ -1,24 +1,34 @@
 import React, { useEffect, useState } from 'react';
 import { RemainderBagColor } from '../data/worksheetData';
+import { IllustrationBoundingBox } from '../types/worksheetModel';
 
-// Cache cleaned data URLs globally so both preview and PDF generator can access them immediately
-let cachedChildrenCropDataUrl: string | null = null;
+const cachedIllustrationMap = new Map<string, string>();
+let latestCleanedIllustrationDataUrl: string | null = null;
 
 export function getCachedChildrenIllustrationDataUrl(): string | null {
-  return cachedChildrenCropDataUrl;
+  return latestCleanedIllustrationDataUrl;
 }
 
-/**
- * Extracts the exact illustration of the 5 children playing cards from the original scan
- * (/assets/aistudio/image_d72e70b6.png) and whitens the photographed paper background
- * to pure #FFFFFF so it blends seamlessly onto a clean white worksheet and PDF.
- */
-export function useCleanedChildrenIllustration(): string | null {
-  const [dataUrl, setDataUrl] = useState<string | null>(cachedChildrenCropDataUrl);
+export function useCleanedChildrenIllustration(
+  sourceImageUrl: string = '/assets/aistudio/image_d72e70b6.png',
+  box?: IllustrationBoundingBox | null
+): string | null {
+  const effectiveBox = box ?? {
+    ymin: 82,
+    xmin: 211,
+    ymax: 210,
+    xmax: 549,
+  };
+  const cacheKey = `${sourceImageUrl.slice(0, 120)}_${effectiveBox.ymin}_${effectiveBox.xmin}_${effectiveBox.ymax}_${effectiveBox.xmax}`;
+  const [dataUrl, setDataUrl] = useState<string | null>(
+    () => cachedIllustrationMap.get(cacheKey) ?? null
+  );
 
   useEffect(() => {
-    if (cachedChildrenCropDataUrl) {
-      setDataUrl(cachedChildrenCropDataUrl);
+    const existing = cachedIllustrationMap.get(cacheKey);
+    if (existing) {
+      latestCleanedIllustrationDataUrl = existing;
+      setDataUrl(existing);
       return;
     }
 
@@ -26,12 +36,16 @@ export function useCleanedChildrenIllustration(): string | null {
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       try {
-        // Original image is 788 x 1120
-        // Children card table illustration region:
-        const sx = Math.round(img.width * 0.211);
-        const sy = Math.round(img.height * 0.082);
-        const sw = Math.round(img.width * 0.338);
-        const sh = Math.round(img.height * 0.128);
+        const sx = Math.max(0, Math.round(img.width * (effectiveBox.xmin / 1000)));
+        const sy = Math.max(0, Math.round(img.height * (effectiveBox.ymin / 1000)));
+        const sw = Math.min(
+          img.width - sx,
+          Math.max(32, Math.round(img.width * ((effectiveBox.xmax - effectiveBox.xmin) / 1000)))
+        );
+        const sh = Math.min(
+          img.height - sy,
+          Math.max(32, Math.round(img.height * ((effectiveBox.ymax - effectiveBox.ymin) / 1000)))
+        );
 
         const canvas = document.createElement('canvas');
         canvas.width = sw;
@@ -43,9 +57,6 @@ export function useCleanedChildrenIllustration(): string | null {
         const imageData = ctx.getImageData(0, 0, sw, sh);
         const d = imageData.data;
 
-        // Estimate background paper luminance across the top-left / bottom-right corners
-        // In the scan, the paper around the illustration has RGB roughly (205..228, 205..228, 205..228)
-        // with low saturation. The grey table inside the illustration is darker (~175..195).
         for (let y = 0; y < sh; y++) {
           for (let x = 0; x < sw; x++) {
             const i = (y * sw + x) * 4;
@@ -58,8 +69,6 @@ export function useCleanedChildrenIllustration(): string | null {
             const sat = maxC - minC;
             const lum = 0.299 * r + 0.587 * g + 0.114 * b;
 
-            // Paper background is light and nearly achromatic (sat < 18, lum > 196)
-            // Also feather edges near the border of the crop
             const distFromEdge = Math.min(x, y, sw - 1 - x, sh - 1 - y);
             const edgeThreshold = distFromEdge < 8 ? 182 : 199;
 
@@ -68,13 +77,11 @@ export function useCleanedChildrenIllustration(): string | null {
               d[i + 1] = 255;
               d[i + 2] = 255;
             } else if (lum > edgeThreshold - 12 && sat < 16) {
-              // Soft transition to white to avoid jagged halo
               const t = (lum - (edgeThreshold - 12)) / 12;
               d[i] = Math.min(255, Math.round(r + (255 - r) * t));
               d[i + 1] = Math.min(255, Math.round(g + (255 - g) * t));
               d[i + 2] = Math.min(255, Math.round(b + (255 - b) * t));
             } else {
-              // Boost contrast slightly for crisp print look
               const boost = 1.08;
               d[i] = Math.min(255, Math.max(0, Math.round((r - 128) * boost + 132)));
               d[i + 1] = Math.min(255, Math.max(0, Math.round((g - 128) * boost + 132)));
@@ -85,14 +92,15 @@ export function useCleanedChildrenIllustration(): string | null {
 
         ctx.putImageData(imageData, 0, 0);
         const cleaned = canvas.toDataURL('image/png');
-        cachedChildrenCropDataUrl = cleaned;
+        cachedIllustrationMap.set(cacheKey, cleaned);
+        latestCleanedIllustrationDataUrl = cleaned;
         setDataUrl(cleaned);
       } catch {
         // Fallback handled by SVG vector illustration
       }
     };
-    img.src = '/assets/aistudio/image_d72e70b6.png';
-  }, []);
+    img.src = sourceImageUrl;
+  }, [sourceImageUrl, cacheKey, effectiveBox.xmin, effectiveBox.ymin, effectiveBox.xmax, effectiveBox.ymax]);
 
   return dataUrl;
 }
@@ -246,38 +254,39 @@ export const RemainderSacksInteractive: React.FC<{
   activeBrush?: RemainderBagColor;
   onSelectBrush?: (color: RemainderBagColor) => void;
   interactive?: boolean;
-}> = ({ activeBrush, onSelectBrush, interactive = false }) => {
+  customSacks?: Array<{ label: string; subLabel: string; color: 'red' | 'blue' | 'green' }>;
+}> = ({ activeBrush, onSelectBrush, interactive = false, customSacks }) => {
   const sacks: Array<{
     color: 'red' | 'blue' | 'green';
-    remainder: 2 | 3 | 4;
+    topText: string;
+    bottomText: string;
     fill: string;
     darkStroke: string;
-    highlight: string;
     label: string;
   }> = [
     {
       color: 'red',
-      remainder: 2,
+      topText: customSacks?.[0]?.label ?? 'Rest',
+      bottomText: customSacks?.[0]?.subLabel ?? '2',
       fill: '#c84b31',
       darkStroke: '#27272a',
-      highlight: '#e06d53',
-      label: 'Rest 2',
+      label: `${customSacks?.[0]?.label ?? 'Rest'} ${customSacks?.[0]?.subLabel ?? '2'}`,
     },
     {
       color: 'blue',
-      remainder: 3,
+      topText: customSacks?.[1]?.label ?? 'Rest',
+      bottomText: customSacks?.[1]?.subLabel ?? '3',
       fill: '#5b7db1',
       darkStroke: '#27272a',
-      highlight: '#7fa1d4',
-      label: 'Rest 3',
+      label: `${customSacks?.[1]?.label ?? 'Rest'} ${customSacks?.[1]?.subLabel ?? '3'}`,
     },
     {
       color: 'green',
-      remainder: 4,
+      topText: customSacks?.[2]?.label ?? 'Rest',
+      bottomText: customSacks?.[2]?.subLabel ?? '4',
       fill: '#538d4e',
       darkStroke: '#27272a',
-      highlight: '#72b06d',
-      label: 'Rest 4',
+      label: `${customSacks?.[2]?.label ?? 'Rest'} ${customSacks?.[2]?.subLabel ?? '4'}`,
     },
   ];
 
@@ -355,7 +364,7 @@ export const RemainderSacksInteractive: React.FC<{
                 fontWeight="600"
                 fontFamily="Plus Jakarta Sans, sans-serif"
               >
-                Rest
+                {s.topText}
               </text>
               <text
                 x="34"
@@ -366,7 +375,7 @@ export const RemainderSacksInteractive: React.FC<{
                 fontWeight="700"
                 fontFamily="Plus Jakarta Sans, sans-serif"
               >
-                {s.remainder}
+                {s.bottomText}
               </text>
             </svg>
           </button>

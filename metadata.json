@@ -1,0 +1,6 @@
+{
+  "name": "Arbeitsblatt-Studio: Dividieren mit Rest (S. 22)",
+  "description": "Originalgetreue, bereinigte PDF-Rekonstruktion der Mathematik-Buchseite 22 (Dividieren mit Rest) ohne handschriftliche Einträge, inklusive PDF-Export, Lösungsblatt und interaktivem Übungsmodus.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
